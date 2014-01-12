@@ -583,14 +583,9 @@ L<Elasticsearch::Scroll>.
 
 =over
 
-=item * Async support
+=item * SearchBuilder
 
-Add async support using L<Promises> for L<AnyEvent> and perhaps L<Mojo>.
-
-=item * New frontend
-
-Add a new client with a similar less verbose interface to L<ElasticSearch>
-and integration with L<ElasticSearch::SearchBuilder>.
+Add a new client which integrates with L<ElasticSearch::SearchBuilder>.
 
 =back
 
