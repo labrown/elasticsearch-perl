@@ -9,7 +9,7 @@ extends 'Elasticsearch';
 use Elasticsearch::Util qw(parse_params);
 use namespace::clean;
 
-our $VERSION = '0.77';
+our $VERSION = '0.76';
 
 #===================================
 sub new {
@@ -27,5 +27,7 @@ sub new {
 }
 
 1;
+
+# ABSTRACT: Async interface to Elasticsearch using Promises
 
 __END__

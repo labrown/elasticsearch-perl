@@ -11,14 +11,16 @@ my $trace
     : $ENV{TRACE} eq '1' ? 'Stderr'
     :                      [ 'File', $ENV{TRACE} ];
 
-my $cv = AE::cv;
-
+my $cv      = AE::cv;
+my $version = $ENV{ES_VERSION} || '';
+my $api     = $version =~ /^0.90/ ? '0_90::Direct' : 'Direct';
+my $cxn     = $ENV{ES_CXN} || do "default_async_cxn.pl" || die $!;
 my $es;
 if ( $ENV{ES} ) {
     $es = Elasticsearch::Async->new(
         nodes    => $ENV{ES},
         trace_to => $trace,
-        cxn      => $ENV{ES_CXN} || 'AEHTTP'
+        cxn      => $cxn,
     );
     $es->ping->then( sub { $cv->send(@_) }, sub { $cv->croak(@_) } );
     eval { $cv->recv } or do {
