@@ -55,8 +55,9 @@ sub add_action {
             next
                 unless ( $max_size && $size >= $max_size )
                 || $max_count && $count >= $max_count;
-            return $self->flush->finalize( $weak_add,
-                sub { $deferred->reject } );
+
+            return $self->flush->done( $weak_add,
+                sub { $deferred->reject(@_) } );
         }
         return $deferred->resolve;
 
@@ -74,9 +75,7 @@ sub flush {
     my $self = shift;
 
     unless ( $self->_buffer_size ) {
-        my $deferred = deferred;
-        $deferred->resolve( { items => [] } );
-        return $deferred->promise;
+        return deferred->resolve( { items => [] } )->promise;
     }
 
     my @items = ( @{ $self->_buffer } );
@@ -87,16 +86,12 @@ sub flush {
         print ".";
     }
 
-    $self->es->bulk( %{ $self->_bulk_args }, body => \@items )->then(
-        sub {
-            $self->_report( \@items, @_ );
-            @_;
-        },
-        sub {
-            $self->on_fatal->(@_);
-            @_;
-        }
+    my $promise = $self->es->bulk( %{ $self->_bulk_args }, body => \@items );
+    $promise->done(
+        sub { $self->_report( \@items, @_ ) },
+        sub { $self->on_fatal->(@_) }
     );
+    return $promise;
 }
 
 #===================================
@@ -132,26 +127,17 @@ sub reindex {
         my $weak_cb;
         my $cb = sub {
             my @docs = $src->();
-            unless (@docs) {
-                $deferred->resolve;
-                return;
-            }
+            return $deferred->resolve
+                unless @docs;
             $self->index( grep {$_} map { $transform->($_) } @docs )
-                ->finalize( $weak_cb, sub { $deferred->reject(@_) } );
+                ->done( $weak_cb, sub { $deferred->reject(@_) } );
         };
         weaken( $weak_cb = $cb );
         $promise = $deferred->promise;
         $cb->();
     }
 
-    my @return;
-    $promise
-
-        # flush on success or failure
-        ->then( sub { $self->flush }, sub { @return = @_; $self->flush } )
-
-        # return success or error
-        ->then( sub { }, sub {@return} );
+    $promise->finally( sub { $self->flush } );
 }
 
 #===================================
@@ -169,7 +155,7 @@ sub _hash_to_scroll {
         }
         return unless @docs;
 
-        $self->index(@docs)->then( sub { }, sub { $scroll->finish } );
+        $self->index(@docs)->catch( sub { $scroll->finish } );
     };
 
     my $on_start;

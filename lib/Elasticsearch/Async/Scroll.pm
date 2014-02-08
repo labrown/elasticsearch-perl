@@ -2,7 +2,7 @@ package Elasticsearch::Async::Scroll;
 
 use Moo;
 use Elasticsearch::Util qw(parse_params throw);
-use Elasticsearch::Async::Util qw(isa_promise);
+use Elasticsearch::Async::Util qw(thenable);
 use Scalar::Util qw(weaken blessed);
 use Promises qw(deferred);
 use namespace::clean;
@@ -58,6 +58,10 @@ sub start {
         }
         )->then(
         sub {
+            $self->_fetch_loop;
+        }
+        )->then(
+        sub {
             $self->finish;
             $self->_clear__guard;
             @_;
@@ -88,8 +92,21 @@ sub _first_results {
     return unless $total;
 
     my $hits = $results->{hits}{hits};
-    return $self->_fetch_loop unless @$hits;
-    $self->_push_results($hits)->then( sub { $self->_fetch_loop } );
+    return unless @$hits;
+    return $self->_push_results($hits);
+}
+
+#===================================
+sub _next_results {
+#===================================
+    my ( $self, $results ) = @_;
+    $self->_set__scroll_id( $results->{_scroll_id} );
+    $self->_set_total_took( $self->total_took + $results->{took} );
+
+    my $hits = $results->{hits}{hits};
+    return $self->finish
+        unless @$hits;
+    $self->_push_results($hits);
 }
 
 #===================================
@@ -101,36 +118,18 @@ sub _fetch_loop {
     my $weak_loop;
     my $loop = sub {
         if ( $self->is_finished ) {
-            $d->resolve;
-            return;
+            return $d->resolve;
         }
         $self->es->scroll(
             scroll => $self->scroll,
             body   => $self->_scroll_id
 
             )->then( sub { $self->_next_results(@_) } )
-            ->finalize( $weak_loop, sub { $d->reject(@_) } );
+            ->done( $weak_loop, sub { $d->reject(@_) } );
     };
     weaken( $weak_loop = $loop );
     $loop->();
     return $d->promise;
-}
-
-#===================================
-sub _next_results {
-#===================================
-    my ( $self, $results ) = @_;
-    $self->_set__scroll_id( $results->{_scroll_id} );
-    $self->_set_total_took( $self->total_took + $results->{took} );
-
-    my $hits = $results->{hits}{hits};
-
-    unless (@$hits) {
-        $self->finish;
-        return;
-    }
-    return unless @$hits;
-    $self->_push_results($hits);
 }
 
 #===================================
@@ -143,17 +142,17 @@ sub _push_results {
     my $deferred = deferred;
 
     my $weak_process;
-    $weak_process = my $process = sub {
+    my $process = sub {
         while ( !$self->is_finished ) {
             my @results  = $it->() or last;
             my @response = $on_results->(@results);
-            my $promise  = isa_promise(@response) or next;
-            return $promise->finalize( $weak_process,
+            my $promise  = thenable(@response) or next;
+            return $promise->done( $weak_process,
                 sub { $deferred->reject(@_) } );
         }
         $deferred->resolve;
     };
-    weaken $weak_process;
+    weaken( $weak_process = $process );
     $process->();
     return $deferred->promise;
 }

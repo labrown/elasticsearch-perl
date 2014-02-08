@@ -16,28 +16,33 @@ sub next_cxn {
 #===================================
     my ( $self, $no_sniff ) = @_;
 
-    if ( !$no_sniff and $self->next_sniff <= time() ) {
-        return $self->sniff->then( sub { $self->next_cxn('no_sniff') } );
-    }
+    return $self->sniff->then( sub { $self->next_cxn('no_sniff') } )
+        if $self->next_sniff <= time() && !$no_sniff;
 
-    my $cxns     = $self->cxns;
-    my $total    = @$cxns;
-    my $deferred = deferred;
+    my $cxns  = $self->cxns;
+    my $total = @$cxns;
+    my $cxn;
 
     while ( 0 < $total-- ) {
-        my $cxn = $cxns->[ $self->next_cxn_num ];
-        if ( $cxn->is_live ) {
-            $deferred->resolve($cxn);
-            return $deferred->promise;
-        }
+        $cxn = $cxns->[ $self->next_cxn_num ];
+        last if $cxn->is_live;
+        undef $cxn;
     }
-    $deferred->reject(
-        new_error(
-            "NoNodes",
-            "No nodes are available: [" . $self->cxns_seeds_str . ']'
-        )
-    );
-    $deferred->promise;
+
+    my $deferred = deferred;
+
+    if ($cxn) {
+        $deferred->resolve($cxn);
+    }
+    else {
+        $deferred->reject(
+            new_error(
+                "NoNodes",
+                "No nodes are available: [" . $self->cxns_seeds_str . ']'
+            )
+        );
+    }
+    return $deferred->promise;
 }
 
 #===================================
@@ -73,7 +78,7 @@ sub sniff {
         $done_seeds++;
     }
 
-    my $weak_check_sniff;
+    my ( $weak_check_sniff, $cxn );
     my $check_sniff = sub {
 
         return if $done;
@@ -83,14 +88,15 @@ sub sniff {
             $self->_clear_sniff;
             return $deferred->resolve();
         }
-        if ( my $cxn = shift @all ) {
-            return $self->sniff_cxn($cxn)->then($weak_check_sniff);
-        }
-        unless ( $done_seeds++ ) {
+
+        unless ( @all && $done_seeds++ ) {
             $self->logger->infof(
                 "No live nodes available. Trying seed nodes.");
             @all = $self->_seeds_as_cxns;
-            return $self->sniff_cxn( shift(@all) )->then($weak_check_sniff);
+        }
+
+        if ( my $cxn = shift @all ) {
+            return $cxn->sniff->done($weak_check_sniff);
         }
         if ( --$current == 0 ) {
             $self->_clear_sniff;
@@ -99,12 +105,10 @@ sub sniff {
     };
     weaken( $weak_check_sniff = $check_sniff );
 
-    my $max = $self->concurrent_sniff;
-    for ( 1 .. $max ) {
-        my $cxn = shift @all
-            or last;
-        $self->sniff_cxn($cxn)->then($check_sniff);
+    for ( 1 .. $self->concurrent_sniff ) {
+        my $cxn = shift(@all) || last;
         $current++;
+        $cxn->sniff->done($check_sniff);
     }
 
     return $self->_current_sniff( $deferred->promise );
@@ -116,18 +120,6 @@ sub _seeds_as_cxns {
     my $self    = shift;
     my $factory = $self->cxn_factory;
     return map { $factory->new_cxn($_) } @{ $self->seed_nodes };
-}
-
-#===================================
-sub sniff_cxn {
-#===================================
-    my ( $self, $cxn ) = @_;
-    my $deferred = deferred;
-    $cxn->sniff->then(
-        sub { $deferred->resolve( $cxn, @_ ) },
-        sub { $deferred->resolve($cxn) }
-    );
-    $deferred->promise;
 }
 
 1;

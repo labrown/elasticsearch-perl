@@ -18,53 +18,59 @@ sub perform_request {
 
     my $deferred = deferred;
 
-    my $fatal_error = sub {
-        my ( $error, $cxn ) = @_;
-        if ($cxn) {
-            $logger->trace_request( $cxn, $params );
-            $logger->trace_error( $cxn, $error );
-            delete $error->{vars}{body};
+    my ( $start, $cxn );
+    $pool->next_cxn
+
+        # perform request
+        ->then(
+        sub {
+            $cxn   = shift;
+            $start = time();
+            $cxn->perform_request($params);
         }
-        $error->is('NoNodes')
-            ? $logger->critical($error)
-            : $logger->error($error);
+        )
 
-        $deferred->reject($error);
-    };
+        # log request regardless of success/failure
+        ->finally( sub { $logger->trace_request( $cxn, $params ) } )
 
-    my $try_request = sub {
-        my $cxn   = shift;
-        my $start = time();
+        # request failed, should retry?
+        ->catch(
+        sub {
+            my $error = upgrade_error( shift(), { request => $params } );
+            die $error unless $pool->request_failed( $cxn, $error );
 
-        $cxn->perform_request($params)->then(
-            sub {
-                my ( $code, $response ) = @_;
+            # log failed, then retry
+            $logger->debugf( "[%s] %s", $cxn->stringify, "$error" );
+            $logger->info('Retrying request on a new cxn');
+            $self->perform_request($params);
+        }
+        )
+
+        ->done(
+        # request succeeded
+        sub {
+            my ( $code, $response ) = @_;
+            $pool->request_ok($cxn);
+            $logger->trace_response( $cxn, $code, $response,
+                time() - $start );
+            $deferred->resolve($response);
+        },
+
+        # log fatal error
+        sub {
+            my $error = shift;
+            if ($cxn) {
                 $logger->trace_request( $cxn, $params );
-                $pool->request_ok($cxn);
-                $logger->trace_response( $cxn, $code, $response,
-                    time() - $start );
-                $deferred->resolve($response);
-            },
-            sub {
-                my $error = upgrade_error( shift(), { request => $params } );
-                if ( $pool->request_failed( $cxn, $error ) ) {
-                    $logger->trace_request( $cxn, $params );
-                    $logger->debugf( "[%s] %s", $cxn->stringify, "$error" );
-                    $logger->info('Retrying request on a new cxn');
-                    $self->perform_request($params)->then(
-                        sub { $deferred->resolve(@_) },
-                        sub { $deferred->reject(@_) }
-                    );
-                    return;
-                }
-                $fatal_error->( $error, $cxn );
+                $logger->trace_error( $cxn, $error );
+                delete $error->{vars}{body};
             }
+            $error->is('NoNodes')
+                ? $logger->critical($error)
+                : $logger->error($error);
+            $deferred->reject($error);
+        }
         );
-    };
-
-    $pool->next_cxn->then( $try_request, $fatal_error );
-
-    $deferred->promise;
+    return $deferred->promise;
 }
 
 1;

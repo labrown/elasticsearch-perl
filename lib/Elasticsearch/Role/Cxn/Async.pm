@@ -24,6 +24,7 @@ sub pings_ok {
         sub {
             $self->logger->debug(@_);
             $self->mark_dead;
+            die(@_);
         }
         );
 }
@@ -44,13 +45,8 @@ sub sniff {
             timeout => $self->sniff_request_timeout,
         }
         )->then(
-        sub {
-            $_[1]->{nodes};
-        },
-        sub {
-            $self->logger->debug(@_);
-            @_;
-        }
+        sub { ( $self, $_[1]->{nodes} ) },
+        sub { $self->logger->debug(@_); ($self); }
         );
 }
 1;

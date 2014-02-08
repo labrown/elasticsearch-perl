@@ -1,5 +1,7 @@
+#!perl -d
 use EV;
 use AE;
+
 use Promises backend => ['EV'];
 use Elasticsearch::Async;
 use Test::More;
@@ -14,13 +16,16 @@ my $trace
 my $cv      = AE::cv;
 my $version = $ENV{ES_VERSION} || '';
 my $api     = $version =~ /^0.90/ ? '0_90::Direct' : 'Direct';
+my $body    = $ENV{ES_BODY} || 'GET';
 my $cxn     = $ENV{ES_CXN} || do "default_async_cxn.pl" || die $!;
 my $es;
 if ( $ENV{ES} ) {
     $es = Elasticsearch::Async->new(
-        nodes    => $ENV{ES},
-        trace_to => $trace,
-        cxn      => $cxn,
+        nodes            => $ENV{ES},
+        trace_to         => $trace,
+        cxn              => $cxn,
+        client           => $api,
+        send_get_body_as => $body
     );
     $es->ping->then( sub { $cv->send(@_) }, sub { $cv->croak(@_) } );
     eval { $cv->recv } or do {
@@ -35,3 +40,4 @@ unless ($es) {
 }
 
 return $es;
+

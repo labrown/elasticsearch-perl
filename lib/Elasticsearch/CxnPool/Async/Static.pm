@@ -13,58 +13,48 @@ sub next_cxn {
 #===================================
     my ($self) = @_;
 
-    my $cxns  = $self->cxns;
-    my $total = @$cxns;
-
-    my $now = time();
-    my @skipped;
-    my %seen;
+    my $cxns     = $self->cxns;
+    my $now      = time();
     my $deferred = deferred;
 
-    my $weak_find_cxn;
+    my ( %seen, @skipped, $cxn, $weak_find_cxn );
+
     my $find_cxn = sub {
+        my $total = @$cxns;
 
-        my $cxn;
+        if ( $total > keys %seen ) {
 
-        #  tried all live nodes
-        if ( keys %seen == $total ) {
+            # we haven't seen all cxns yet
+            while ( $total-- ) {
+                $cxn = $cxns->[ $self->next_cxn_num ];
+                next if $seen{$cxn}++;
 
-            # try dead nodes
-            if ( $cxn = shift @skipped ) {
-                return $cxn->pings_ok->then(
-                    sub { $deferred->resolve($cxn) },    # node ok
-                    $weak_find_cxn                       # try again
-                );
+                return $deferred->resolve($cxn)
+                    if $cxn->is_live;
+
+                last if $cxn->next_ping <= time();
+
+                push @skipped, $cxn;
+                undef $cxn;
             }
-
-            # no live nodes
-            $_->force_ping for @$cxns;
-            $deferred->reject(
-                new_error(
-                    "NoNodes",
-                    "No nodes are available: [" . $self->cxns_str . ']'
-                )
-            );
-            return;
         }
 
-        # get next unseen node
-        while ( $cxn = $cxns->[ $self->next_cxn_num ] ) {
-            last unless $seen{$cxn}++;
-        }
-
-        return $deferred->resolve($cxn)
-            if $cxn->is_live;
-
-        if ( $cxn->next_ping < $now ) {
+        if ( $cxn ||= shift @skipped ) {
             return $cxn->pings_ok->then(
-                sub { $deferred->resolve($cxn) },    # node ok
-                $weak_find_cxn                       # try again
+                sub { $deferred->resolve($cxn) },    # success
+                $weak_find_cxn                       # resolve
             );
         }
 
-        push @skipped, $cxn;
-        $weak_find_cxn->();
+        $_->force_ping for @$cxns;
+
+        return $deferred->reject(
+            new_error(
+                "NoNodes",
+                "No nodes are available: [" . $self->cxns_str . ']'
+            )
+        );
+
     };
     weaken( $weak_find_cxn = $find_cxn );
 

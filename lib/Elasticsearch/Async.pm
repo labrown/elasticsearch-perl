@@ -1,9 +1,8 @@
 package Elasticsearch::Async;
 
-use Elasticsearch 0.76;
+use Elasticsearch 1.00;
 
-#use Promises 0.05 ();
-use Promises();
+use Promises 0.90 ();
 use Moo 1.003;
 extends 'Elasticsearch';
 use Elasticsearch::Util qw(parse_params);

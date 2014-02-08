@@ -2,11 +2,35 @@ package Elasticsearch::Role::CxnPool::Static::NoPing;
 
 use Moo::Role;
 with 'Elasticsearch::Role::CxnPool';
-requires 'next_cxn';
+
 use namespace::clean;
 
 has 'max_retries' => ( is => 'lazy' );
 has '_dead_cxns' => ( is => 'ro', default => sub { [] } );
+
+#===================================
+sub next_cxn {
+#===================================
+    my $self = shift;
+
+    my $cxns  = $self->cxns;
+    my $total = @$cxns;
+    my $dead  = $self->_dead_cxns;
+
+    while ( $total-- ) {
+        my $cxn = $cxns->[ $self->next_cxn_num ];
+        return $cxn
+            if $cxn->is_live
+            || $cxn->next_ping < time();
+        push @$dead, $cxn unless grep { $_ eq $cxn } @$dead;
+    }
+
+    if ( @$dead and $self->retries <= $self->max_retries ) {
+        $_->force_ping for @$dead;
+        return shift @$dead;
+    }
+    throw( "NoNodes", "No nodes are available: [" . $self->cxns_str . ']' );
+}
 
 #===================================
 sub _build_max_retries { @{ shift->cxns } - 1 }

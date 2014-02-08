@@ -1,15 +1,15 @@
 package Elasticsearch::Async::Util;
 
 use Moo;
-use Sub::Exporter -setup => { exports => ['isa_promise'] };
+use Sub::Exporter -setup => { exports => ['thenable'] };
 
 #===================================
-sub isa_promise {
+sub thenable {
 #===================================
     return
             unless @_ == 1
         and blessed $_[0]
-        and $_[0]->isa('Promises::Promise');
+        and $_[0]->can('then');
     return shift();
 }
 1;
